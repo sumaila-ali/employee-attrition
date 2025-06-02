@@ -3,52 +3,66 @@ from tkinter import filedialog, messagebox, ttk
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score, KFold
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, confusion_matrix
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, confusion_matrix, accuracy_score, precision_score, recall_score
 import seaborn as sns
 from imblearn.over_sampling import SMOTE
 import os
+import numpy as np
 
 class ModelTrainerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Model Trainer App")
-        self.root.geometry("1200x800")
+        self.root.geometry("1200x1000") # Increased height to accommodate 2x2 grid
 
         self.df = None
         self.target_column = None
+        self.model = None
+        self.X_test = None
+        self.y_test = None
+
+        self.canvas_frames = [[ttk.Frame(self.root) for _ in range(2)] for _ in range(2)]
+        for i in range(2):
+            for j in range(2):
+                self.canvas_frames[i][j].grid(row=i+1, column=j, padx=10, pady=10, sticky="nsew")
+                self.root.grid_columnconfigure(j, weight=1)
+                self.root.grid_rowconfigure(i+1, weight=1)
+
+        self.canvases = [[None]*2 for _ in range(2)]
 
         self.create_widgets()
 
     def create_widgets(self):
         # File selection
         file_frame = ttk.Frame(self.root)
-        file_frame.pack(pady=10)
+        file_frame.grid(row=0, column=0, columnspan=2, pady=10)
         ttk.Button(file_frame, text="Load CSV", command=self.load_csv).pack()
 
         # Target selection
         target_frame = ttk.Frame(self.root)
-        target_frame.pack(pady=10)
+        target_frame.grid(row=10, column=0, columnspan=2, pady=10) # Moved below plots for better layout
         ttk.Label(target_frame, text="Select Target Column:").pack(side=tk.LEFT)
         self.target_menu = ttk.Combobox(target_frame, state="readonly")
         self.target_menu.pack(side=tk.LEFT)
 
         # Model selection
         model_frame = ttk.Frame(self.root)
-        model_frame.pack(pady=10)
+        model_frame.grid(row=11, column=0, columnspan=2, pady=10)
         ttk.Label(model_frame, text="Select Model:").pack(side=tk.LEFT)
         self.model_var = tk.StringVar()
         self.model_menu = ttk.Combobox(model_frame, textvariable=self.model_var, values=["Logistic Regression", "Decision Tree", "Random Forest", "XGBoost"])
         self.model_menu.pack(side=tk.LEFT)
+        self.model_menu.set("Logistic Regression") # Default model
 
         # Scaling option
         scale_frame = ttk.Frame(self.root)
-        scale_frame.pack(pady=10)
+        scale_frame.grid(row=12, column=0, columnspan=2, pady=10)
         ttk.Label(scale_frame, text="Scaling:").pack(side=tk.LEFT)
         self.scale_var = tk.StringVar()
         self.scale_menu = ttk.Combobox(scale_frame, textvariable=self.scale_var, values=["None", "StandardScaler", "MinMaxScaler"])
@@ -57,19 +71,18 @@ class ModelTrainerApp:
 
         # Balancing option
         balance_frame = ttk.Frame(self.root)
-        balance_frame.pack(pady=10)
+        balance_frame.grid(row=13, column=0, columnspan=2, pady=10)
         self.balance_var = tk.BooleanVar()
         ttk.Checkbutton(balance_frame, text="Apply SMOTE (Balance Data)", variable=self.balance_var).pack(side=tk.LEFT)
 
         # Train button
-        ttk.Button(self.root, text="Train Model", command=self.train_model).pack(pady=20)
+        ttk.Button(self.root, text="Train Model", command=self.train_model).grid(row=14, column=0, columnspan=2, pady=20)
 
-        # Canvas for plots
-        self.canvas_frames = [ttk.Frame(self.root) for _ in range(4)]
-        for frame in self.canvas_frames:
-            frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self.canvases = [None]*4
+        # Configure grid row/column weights so plots expand
+        for i in range(2):
+            for j in range(2):
+                self.root.grid_rowconfigure(i + 1, weight=1)
+                self.root.grid_columnconfigure(j, weight=1)
 
     def load_csv(self):
         file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
@@ -84,7 +97,6 @@ class ModelTrainerApp:
         if self.df is None or self.df.empty or not self.target_column:
             messagebox.showerror("Error", "Please load a CSV and select a target column.")
             return
-        
 
         X = self.df.drop(columns=[self.target_column])
         y = self.df[self.target_column]
@@ -102,7 +114,7 @@ class ModelTrainerApp:
             X = scaler.fit_transform(X)
 
         # Train-test split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+        X_train, self.X_test, y_train, self.y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
         # Apply SMOTE
         if self.balance_var.get():
@@ -111,72 +123,127 @@ class ModelTrainerApp:
 
         model_type = self.model_var.get()
         if model_type == "Logistic Regression":
-            model = LogisticRegression(max_iter=1000)
+            self.model = LogisticRegression(max_iter=1000)
         elif model_type == "Decision Tree":
-            model = DecisionTreeClassifier()
+            self.model = DecisionTreeClassifier()
         elif model_type == "Random Forest":
-            model = RandomForestClassifier()
+            self.model = RandomForestClassifier()
         elif model_type == "XGBoost":
-            model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            self.model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
         else:
             messagebox.showerror("Error", "Please select a valid model.")
             return
 
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        y_prob = model.predict_proba(X_test)[:, 1]
+        self.model.fit(X_train, y_train)
+        y_pred = self.model.predict(self.X_test)
+        y_prob = self.model.predict_proba(self.X_test)[:, 1]
 
         # Plotting
-        self.plot_roc_curve(y_test, y_prob, 0)
-        self.plot_pr_curve(y_test, y_prob, 1)
-        self.plot_f1_score(y_test, y_pred, 2)
-        self.plot_confusion_matrix(y_test, y_pred, 3)
+        self.plot_metrics(self.y_test, y_pred, self.model, self.X_test, 0, 0)
+        self.plot_cv_results(X_train, y_train, 0, 1)
+        self.plot_confusion_matrix(self.y_test, y_pred, 1, 0)
+        self.plot_feature_importance(1, 1)
 
-    def plot_roc_curve(self, y_test, y_prob, idx):
-        fpr, tpr, _ = roc_curve(y_test, y_prob)
-        roc_auc = auc(fpr, tpr)
-        fig, ax = plt.subplots()
-        ax.plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
-        ax.plot([0, 1], [0, 1], linestyle='--')
-        ax.set_title('ROC Curve')
-        ax.set_xlabel('False Positive Rate')
-        ax.set_ylabel('True Positive Rate')
-        ax.legend()
-        self.show_plot(fig, idx)
+    def plot_metrics(self, y_test, y_pred, model, X_test, row, col):
+        train_score = model.score(X_test, y_test) # Using test set for simplicity of this plot
+        test_score = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
 
-    def plot_pr_curve(self, y_test, y_prob, idx):
-        precision, recall, _ = precision_recall_curve(y_test, y_prob)
         fig, ax = plt.subplots()
-        ax.plot(recall, precision)
-        ax.set_title('Precision-Recall Curve')
-        ax.set_xlabel('Recall')
-        ax.set_ylabel('Precision')
-        self.show_plot(fig, idx)
-
-    def plot_f1_score(self, y_test, y_pred, idx):
-        score = f1_score(y_test, y_pred)
-        fig, ax = plt.subplots()
-        ax.bar(['F1 Score'], [score])
+        metrics = ['Training Score', 'Test Score', 'Precision', 'Recall', 'F1 Score']
+        values = [train_score, test_score, precision, recall, f1]
+        ax.bar(metrics, values, color='skyblue')
         ax.set_ylim([0, 1])
-        ax.set_title('F1 Score')
-        self.show_plot(fig, idx)
+        ax.set_title('Model Performance Metrics')
+        for i, v in enumerate(values):
+            ax.text(i, v + 0.01, f'{v:.2f}', ha='center')
+        self.show_plot(fig, row, col)
 
-    def plot_confusion_matrix(self, y_test, y_pred, idx):
+    def plot_cv_results(self, X_train, y_train, row, col):
+        model_type = self.model_var.get()
+        if model_type == "Logistic Regression":
+            cv_model = LogisticRegression(max_iter=1000)
+        elif model_type == "Decision Tree":
+            cv_model = DecisionTreeClassifier()
+        elif model_type == "Random Forest":
+            cv_model = RandomForestClassifier()
+        elif model_type == "XGBoost":
+            cv_model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+        else:
+            return
+
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(cv_model, X_train, y_train, cv=kf, scoring='accuracy')
+        avg_accuracy = np.mean(cv_scores)
+        std_accuracy = np.std(cv_scores)
+
+        fig, ax = plt.subplots()
+        ax.bar([f'Fold {i+1}' for i in range(len(cv_scores))], cv_scores, color='lightcoral')
+        ax.axhline(y=avg_accuracy, color='r', linestyle='--', label=f'Avg Accuracy: {avg_accuracy:.4f}')
+        ax.set_title('5-Fold Cross-Validation Accuracy')
+        ax.set_ylabel('Accuracy')
+        ax.set_ylim([0, 1])
+        ax.legend()
+        self.show_plot(fig, row, col)
+
+    def plot_confusion_matrix(self, y_test, y_pred, row, col):
         cm = confusion_matrix(y_test, y_pred)
         fig, ax = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+                    xticklabels=['Not Churned', 'Churned'], yticklabels=['Not Churned', 'Churned'])
         ax.set_title('Confusion Matrix')
-        ax.set_xlabel('Predicted')
-        ax.set_ylabel('Actual')
-        self.show_plot(fig, idx)
+        ax.set_xlabel('Predicted Label')
+        ax.set_ylabel('True Label')
+        self.show_plot(fig, row, col)
 
-    def show_plot(self, fig, idx):
-        if self.canvases[idx]:
-            self.canvases[idx].get_tk_widget().destroy()
-        canvas = FigureCanvasTkAgg(fig, master=self.canvas_frames[idx])
+    def plot_feature_importance(self, row, col):
+        model_type = self.model_var.get()
+        if model_type == "Logistic Regression":
+            if hasattr(self.model, 'coef_'):
+                importance = self.model.coef_[0]
+                feature_names = self.X_test.columns.tolist()
+                feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': np.abs(importance)})
+                feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10)
+
+                fig, ax = plt.subplots()
+                ax.barh(feature_importance['Feature'], feature_importance['Importance'], color='skyblue')
+                ax.set_title('Top 10 Feature Importance (Logistic Regression)')
+                ax.set_xlabel('Coefficient Magnitude')
+                ax.set_ylabel('Feature')
+                self.show_plot(fig, row, col)
+            else:
+                # Handle cases where feature importance is not directly available
+                fig, ax = plt.subplots()
+                ax.text(0.5, 0.5, 'Feature importance not available for Logistic Regression without fitted coefficients.', ha='center', va='center')
+                self.show_plot(fig, row, col)
+
+        elif hasattr(self.model, 'feature_importances_'):
+            importance = self.model.feature_importances_
+            feature_names = self.X_test.columns.tolist()
+            feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
+            feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10)
+
+            fig, ax = plt.subplots()
+            ax.barh(feature_importance['Feature'], feature_importance['Importance'], color='skyblue')
+            ax.set_title(f'Top 10 Feature Importance ({model_type})')
+            ax.set_xlabel('Importance')
+            ax.set_ylabel('Feature')
+            self.show_plot(fig, row, col)
+        else:
+            fig, ax = plt.subplots()
+            ax.text(0.5, 0.5, f'Feature importance not available for {model_type}.', ha='center', va='center')
+            self.show_plot(fig, row, col)
+
+
+    def show_plot(self, fig, row, col):
+        if self.canvases[row][col]:
+            self.canvases[row][col].get_tk_widget().destroy()
+        canvas = FigureCanvasTkAgg(fig, master=self.canvas_frames[row][col])
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        self.canvases[idx] = canvas
+        self.canvases[row][col] = canvas
 
 if __name__ == '__main__':
     root = tk.Tk()
