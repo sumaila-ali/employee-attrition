@@ -9,17 +9,23 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, confusion_matrix, accuracy_score, precision_score, recall_score
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, confusion_matrix, accuracy_score, precision_score, recall_score, classification_report
 import seaborn as sns
 from imblearn.over_sampling import SMOTE
 import os
 import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import uuid
+
+
 
 class ModelTrainerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Model Trainer App")
-        self.root.geometry("1200x1000") # Increased height to accommodate 2x2 grid
+        #self.root.geometry("1200x1000") # Increased height to accommodate 2x2 grid
+        self.root.attributes('-fullscreen', True)
 
         self.df = None
         self.target_column = None
@@ -102,7 +108,7 @@ class ModelTrainerApp:
         y = self.df[self.target_column]
 
         # Handle non-numeric columns
-        X = pd.get_dummies(X)
+        X = pd.get_dummies(X, drop_first=True)
 
         # Apply scaling
         scaler_choice = self.scale_var.get()
@@ -123,13 +129,13 @@ class ModelTrainerApp:
 
         model_type = self.model_var.get()
         if model_type == "Logistic Regression":
-            self.model = LogisticRegression(max_iter=1000)
+            self.model = LogisticRegression(max_iter=1000, random_state=0)
         elif model_type == "Decision Tree":
-            self.model = DecisionTreeClassifier()
+            self.model = DecisionTreeClassifier(random_state=0)
         elif model_type == "Random Forest":
-            self.model = RandomForestClassifier()
+            self.model = RandomForestClassifier(random_state=0)
         elif model_type == "XGBoost":
-            self.model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            self.model = XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=0)
         else:
             messagebox.showerror("Error", "Please select a valid model.")
             return
@@ -140,52 +146,110 @@ class ModelTrainerApp:
 
         # Plotting
         self.plot_metrics(self.y_test, y_pred, self.model, self.X_test, 0, 0)
-        self.plot_cv_results(X_train, y_train, 0, 1)
+        self.plot_cv_results(X_train, y_train,self.X_test, self.y_test, 0, 1)
         self.plot_confusion_matrix(self.y_test, y_pred, 1, 0)
         self.plot_feature_importance(1, 1)
 
+
+
+
     def plot_metrics(self, y_test, y_pred, model, X_test, row, col):
-        train_score = model.score(X_test, y_test) # Using test set for simplicity of this plot
+        # Evaluate metrics
+        train_score = model.score(X_test, y_test)  # Using test set for simplicity
         test_score = accuracy_score(y_test, y_pred)
         precision = precision_score(y_test, y_pred, zero_division=0)
         recall = recall_score(y_test, y_pred, zero_division=0)
         f1 = f1_score(y_test, y_pred, zero_division=0)
 
-        fig, ax = plt.subplots()
-        metrics = ['Training Score', 'Test Score', 'Precision', 'Recall', 'F1 Score']
-        values = [train_score, test_score, precision, recall, f1]
-        ax.bar(metrics, values, color='skyblue')
-        ax.set_ylim([0, 1])
-        ax.set_title('Model Performance Metrics')
-        for i, v in enumerate(values):
-            ax.text(i, v + 0.01, f'{v:.2f}', ha='center')
-        self.show_plot(fig, row, col)
+        # Prepare metrics dictionary
+        metrics = {
+            "Model": model.__class__.__name__,
+            "Training Score": train_score,
+            "Test Score": test_score,
+            "Precision": precision,
+            "Recall": recall,
+            "F1 Score": f1
+        }
 
-    def plot_cv_results(self, X_train, y_train, row, col):
+        # Create a styled figure
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.axis('off')
+        ax.set_facecolor('#ecf0f1')
+
+        # Style settings
+        title_font = {'fontsize': 16, 'fontweight': 'bold', 'color': '#2c3e50'}
+        text_font = {'fontsize': 13, 'color': '#34495e'}
+
+        # Title
+        ax.text(0.5, 0.85, metrics["Model"], ha='center', **title_font, transform=ax.transAxes)
+
+        # Metrics display
+        spacing = 0.70
+        for key in list(metrics.keys())[1:]:
+            ax.text(0.5, spacing, f"{key}: {metrics[key]:.2f}", ha='center', **text_font, transform=ax.transAxes)
+            spacing -= 0.10
+
+        plt.tight_layout()
+
+        # Show the figure directly in tkinter
+        self.show_plot(fig, row, col)
+            
+
+    def plot_cv_results(self, X_train, y_train, X_test, y_test, row, col):
         model_type = self.model_var.get()
+
+        # Select model
         if model_type == "Logistic Regression":
-            cv_model = LogisticRegression(max_iter=1000)
+            model = LogisticRegression(max_iter=1000)
         elif model_type == "Decision Tree":
-            cv_model = DecisionTreeClassifier()
+            model = DecisionTreeClassifier()
         elif model_type == "Random Forest":
-            cv_model = RandomForestClassifier()
+            model = RandomForestClassifier()
         elif model_type == "XGBoost":
-            cv_model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+            model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
         else:
             return
 
+        # 5-Fold Cross-Validation
         kf = KFold(n_splits=5, shuffle=True, random_state=42)
-        cv_scores = cross_val_score(cv_model, X_train, y_train, cv=kf, scoring='accuracy')
-        avg_accuracy = np.mean(cv_scores)
-        std_accuracy = np.std(cv_scores)
+        cv_scores = cross_val_score(model, X_train, y_train, cv=kf, scoring='accuracy')
+        avg_cv = np.mean(cv_scores)
+        std_cv = np.std(cv_scores)
 
-        fig, ax = plt.subplots()
-        ax.bar([f'Fold {i+1}' for i in range(len(cv_scores))], cv_scores, color='lightcoral')
-        ax.axhline(y=avg_accuracy, color='r', linestyle='--', label=f'Avg Accuracy: {avg_accuracy:.4f}')
-        ax.set_title('5-Fold Cross-Validation Accuracy')
-        ax.set_ylabel('Accuracy')
-        ax.set_ylim([0, 1])
-        ax.legend()
+        # Train and predict for classification report
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        
+        # Get classification report
+        target_names = list(map(str, np.unique(y_test)))
+        report = classification_report(y_test, y_pred, target_names=target_names)
+        report_lines = report.strip().split('\n')
+
+        # Add 2-tab indent to the header line (assumes it's line 0)
+        if len(report_lines) > 0:
+            report_lines[0] = '        ' * 2 + report_lines[0]  # 16 spaces
+
+        # Build plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.axis('off')
+        ax.set_facecolor('#ecf0f1')
+
+        # Fonts
+        title_font = {'fontsize': 15, 'fontweight': 'bold', 'color': '#2c3e50'}
+        summary_font = {'fontsize': 11, 'color': '#16a085'}
+        text_font = {'fontsize': 11, 'color': '#34495e', 'family': 'monospace'}
+
+        # Header
+        ax.text(0.5, 1.02, f'{model_type} - CV and Classification Report', ha='center', **title_font, transform=ax.transAxes)
+        ax.text(0.5, 0.97, f'5-Fold CV Avg Accuracy: {avg_cv:.4f} | Std Dev: {std_cv:.4f}', ha='center', **summary_font, transform=ax.transAxes)
+
+        # Classification report lines
+        y_pos = 0.88
+        for line in report_lines:
+            ax.text(0.01, y_pos, line, ha='left', **text_font, transform=ax.transAxes)
+            y_pos -= 0.045
+
+        plt.tight_layout()
         self.show_plot(fig, row, col)
 
     def plot_confusion_matrix(self, y_test, y_pred, row, col):
@@ -205,7 +269,7 @@ class ModelTrainerApp:
                 importance = self.model.coef_[0]
                 feature_names = self.X_test.columns.tolist()
                 feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': np.abs(importance)})
-                feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10)
+                feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10).iloc[::-1]
 
                 fig, ax = plt.subplots()
                 ax.barh(feature_importance['Feature'], feature_importance['Importance'], color='skyblue')
@@ -223,7 +287,7 @@ class ModelTrainerApp:
             importance = self.model.feature_importances_
             feature_names = self.X_test.columns.tolist()
             feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
-            feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10)
+            feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10).iloc[::-1]
 
             fig, ax = plt.subplots()
             ax.barh(feature_importance['Feature'], feature_importance['Importance'], color='skyblue')
