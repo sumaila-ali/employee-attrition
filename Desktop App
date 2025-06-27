@@ -8,15 +8,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, LabelEncoder
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, f1_score, confusion_matrix, accuracy_score, precision_score, recall_score, classification_report
 import seaborn as sns
 from imblearn.over_sampling import SMOTE
 import os
 import numpy as np
-import matplotlib.pyplot as plt
-from PIL import Image
-import uuid
 
 
 
@@ -101,14 +98,21 @@ class ModelTrainerApp:
     def train_model(self):
         self.target_column = self.target_menu.get()
         if self.df is None or self.df.empty or not self.target_column:
+            
             messagebox.showerror("Error", "Please load a CSV and select a target column.")
             return
 
         X = self.df.drop(columns=[self.target_column])
         y = self.df[self.target_column]
+        if y.dtype == 'object' or y.dtype.name == 'category' or isinstance(y.iloc[0], str):
+            self.label_encoder = LabelEncoder()
+            y = self.label_encoder.fit_transform(y)
+        else:
+             self.label_encoder = None
 
         # Handle non-numeric columns
         X = pd.get_dummies(X, drop_first=True)
+        self.feature_names = X.columns.tolist()
 
         # Apply scaling
         scaler_choice = self.scale_var.get()
@@ -177,8 +181,8 @@ class ModelTrainerApp:
         ax.set_facecolor('#ecf0f1')
 
         # Style settings
-        title_font = {'fontsize': 16, 'fontweight': 'bold', 'color': '#2c3e50'}
-        text_font = {'fontsize': 13, 'color': '#34495e'}
+        title_font = {'fontsize': 20, 'fontweight': 'bold', 'color': '#2c3e50'}
+        text_font = {'fontsize': 15, 'color': '#34495e'}
 
         # Title
         ax.text(0.5, 0.85, metrics["Model"], ha='center', **title_font, transform=ax.transAxes)
@@ -221,7 +225,8 @@ class ModelTrainerApp:
         y_pred = model.predict(X_test)
         
         # Get classification report
-        target_names = list(map(str, np.unique(y_test)))
+        target_names = (self.label_encoder.inverse_transform(np.unique(self.y_test)) 
+                if self.label_encoder else list(map(str, np.unique(self.y_test))))
         report = classification_report(y_test, y_pred, target_names=target_names)
         report_lines = report.strip().split('\n')
 
@@ -235,9 +240,9 @@ class ModelTrainerApp:
         ax.set_facecolor('#ecf0f1')
 
         # Fonts
-        title_font = {'fontsize': 15, 'fontweight': 'bold', 'color': '#2c3e50'}
-        summary_font = {'fontsize': 11, 'color': '#16a085'}
-        text_font = {'fontsize': 11, 'color': '#34495e', 'family': 'monospace'}
+        title_font = {'fontsize': 20, 'fontweight': 'bold', 'color': '#2c3e50'}
+        summary_font = {'fontsize': 20, 'color': '#16a085'}
+        text_font = {'fontsize': 20, 'color': '#34495e', 'family': 'monospace'}
 
         # Header
         ax.text(0.5, 1.02, f'{model_type} - CV and Classification Report', ha='center', **title_font, transform=ax.transAxes)
@@ -247,19 +252,21 @@ class ModelTrainerApp:
         y_pos = 0.88
         for line in report_lines:
             ax.text(0.01, y_pos, line, ha='left', **text_font, transform=ax.transAxes)
-            y_pos -= 0.045
+            y_pos -= 0.10
 
         plt.tight_layout()
         self.show_plot(fig, row, col)
 
     def plot_confusion_matrix(self, y_test, y_pred, row, col):
         cm = confusion_matrix(y_test, y_pred)
-        fig, ax = plt.subplots()
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-                    xticklabels=['Not Churned', 'Churned'], yticklabels=['Not Churned', 'Churned'])
-        ax.set_title('Confusion Matrix')
-        ax.set_xlabel('Predicted Label')
-        ax.set_ylabel('True Label')
+        fig, ax = plt.subplots(figsize=(6, 5))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, cbar=False, 
+            xticklabels=self.label_encoder.classes_ if self.label_encoder else ['Class 0', 'Class 1'],
+            yticklabels=self.label_encoder.classes_ if self.label_encoder else ['Class 0', 'Class 1'],
+            annot_kws={"size": 16})
+        ax.set_title('Confusion Matrix', fontsize=16)
+        ax.set_xlabel('Predicted Label', fontsize=14)
+        ax.set_ylabel('True Label', fontsize=14)    
         self.show_plot(fig, row, col)
 
     def plot_feature_importance(self, row, col):
@@ -267,15 +274,15 @@ class ModelTrainerApp:
         if model_type == "Logistic Regression":
             if hasattr(self.model, 'coef_'):
                 importance = self.model.coef_[0]
-                feature_names = self.X_test.columns.tolist()
-                feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': np.abs(importance)})
+                #feature_names = self.feature_names.columns.tolist()
+                feature_importance = pd.DataFrame({'Feature': self.feature_names, 'Importance': np.abs(importance)})
                 feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10).iloc[::-1]
 
                 fig, ax = plt.subplots()
                 ax.barh(feature_importance['Feature'], feature_importance['Importance'], color='skyblue')
-                ax.set_title('Top 10 Feature Importance (Logistic Regression)')
-                ax.set_xlabel('Coefficient Magnitude')
-                ax.set_ylabel('Feature')
+                ax.set_title('Top 10 Feature Importance (Logistic Regression)', fontsize=16)
+                ax.set_xlabel('Coefficient Magnitude', fontsize=14)
+                ax.set_ylabel('Feature', fontsize=14)
                 self.show_plot(fig, row, col)
             else:
                 # Handle cases where feature importance is not directly available
@@ -285,8 +292,8 @@ class ModelTrainerApp:
 
         elif hasattr(self.model, 'feature_importances_'):
             importance = self.model.feature_importances_
-            feature_names = self.X_test.columns.tolist()
-            feature_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importance})
+            #feature_names = self.X_test.columns.tolist()
+            feature_importance = pd.DataFrame({'Feature': self.feature_names, 'Importance': importance})
             feature_importance = feature_importance.sort_values(by='Importance', ascending=False).head(10).iloc[::-1]
 
             fig, ax = plt.subplots()
